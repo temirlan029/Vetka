@@ -51,21 +51,21 @@ class CreateThreadButton(discord.ui.View):
         # Добавляем автора в ветку
         await thread.add_user(user)
 
-        # Добавляем участников с нужными ролями поштучно (без @role, чтобы ветка была реально приватной)
-        added_members = []
+        # Добавляем участников с нужными ролями поштучно (для приватности)
+        role_names = []
         for role_id in ROLE_IDS:
             role = guild.get_role(role_id)
             if role:
+                role_names.append(role.name)
                 for member in role.members:
                     if member != user and member != bot.user:
                         await thread.add_user(member)
-                        added_members.append(member.mention)
 
-        members_text = ", ".join(added_members) if added_members else "персонал"
+        roles_text = ", ".join(role_names) if role_names else "персонал"
 
-        # Отправляем сообщение в ветку БЕЗ упоминания роли (только юзеры)
+        # Отправляем сообщение с названием роли (не @mention, чтобы ветка осталась приватной)
         await thread.send(
-            f"Ветка создана! {members_text} и {user.mention}, пишите здесь."
+            f"Ветка создана! Участники с ролью **{roles_text}** и {user.mention}, пишите здесь."
         )
 
         # Отвечаем пользователю (эфемерное сообщение, видит только он)
