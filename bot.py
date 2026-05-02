@@ -41,11 +41,12 @@ class CreateThreadButton(discord.ui.View):
         user = interaction.user
         guild = interaction.guild
 
-        # Создаём приватную ветку
+        # Создаём приватную ветку (auto_archive_duration=10080 — максимум 7 дней)
         thread = await channel.create_thread(
             name=f"ветка-{user.display_name}",
             type=discord.ChannelType.private_thread,
             invitable=False,
+            auto_archive_duration=10080,
         )
 
         # Добавляем автора в ветку
@@ -86,6 +87,22 @@ async def on_ready():
         print(f"Синхронизировано {len(synced)} команд(а).")
     except Exception as e:
         print(f"Ошибка синхронизации команд: {e}")
+
+
+@bot.event
+async def on_thread_update(before, after):
+    """Если ветка, созданная ботом, была заархивирована — разархивируем её."""
+    if (
+        after.archived
+        and not before.archived
+        and after.owner_id == bot.user.id
+        and isinstance(after, discord.Thread)
+    ):
+        try:
+            await after.edit(archived=False)
+            print(f"Ветка «{after.name}» разархивирована автоматически.")
+        except Exception as e:
+            print(f"Не удалось разархивировать ветку «{after.name}»: {e}")
 
 
 @bot.tree.command(name="setup", description="Отправить сообщение с кнопкой для создания приватной ветки")
