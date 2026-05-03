@@ -1,7 +1,7 @@
 import os
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -13,6 +13,13 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 ROLE_IDS = [
     int(r) for r in os.getenv("ROLE_IDS", "").split(",") if r.strip()
 ]
+
+# ID владельца — бот пишет ему в ЛС при разархивации веток
+OWNER_ID = int(os.getenv("OWNER_ID", "0"))
+
+# ID сервера — бот работает только на этом сервере
+GUILD_ID = int(os.getenv("GUILD_ID", "0"))
+GUILD_OBJ = discord.Object(id=GUILD_ID) if GUILD_ID else None
 # =============================================================
 
 intents = discord.Intents.default()
@@ -76,15 +83,62 @@ class CreateThreadButton(discord.ui.View):
         )
 
 
+async def notify_owner(message: str):
+    """Отправляет сообщение владельцу в ЛС."""
+    if not OWNER_ID:
+        return
+    try:
+        owner = await bot.fetch_user(OWNER_ID)
+        await owner.send(message)
+    except Exception as e:
+        print(f"Не удалось отправить ЛС владельцу: {e}")
+
+
+async def unarchive_bot_threads():
+    """Проверяет архивированные ветки бота на нашем сервере и разархивирует их."""
+    guild = bot.get_guild(GUILD_ID)
+    if not guild:
+        return
+    for channel in guild.text_channels:
+        try:
+            async for thread in channel.archived_threads(limit=None):
+                if thread.owner_id == bot.user.id:
+                    await thread.edit(archived=False)
+                    print(f"Ветка «{thread.name}» разархивирована (была пропущена).")
+                    await notify_owner(
+                        f"⚠️ Ветка **{thread.name}** в #{channel.name} пропала (заархивировалась), "
+                        f"но я её восстановил."
+                    )
+        except discord.Forbidden:
+            pass
+
+
+@tasks.loop(minutes=5)
+async def check_archived_threads():
+    """Каждые 5 минут проверяет и разархивирует ветки бота."""
+    await unarchive_bot_threads()
+
+
+@check_archived_threads.before_loop
+async def before_check():
+    await bot.wait_until_ready()
+
+
 @bot.event
 async def on_ready():
     print(f"Бот запущен как {bot.user} (ID: {bot.user.id})")
     # Регистрируем persistent view, чтобы кнопка работала после перезапуска
     bot.add_view(CreateThreadButton())
-    # Синхронизируем slash-команды
+    # Разархивируем ветки, которые могли заархивироваться пока бот был оффлайн
+    await unarchive_bot_threads()
+    # Запускаем фоновую проверку каждые 5 минут
+    if not check_archived_threads.is_running():
+        check_archived_threads.start()
+    # Синхронизируем slash-команды только для нашего сервера
     try:
-        synced = await bot.tree.sync()
-        print(f"Синхронизировано {len(synced)} команд(а).")
+        bot.tree.copy_global_to(guild=GUILD_OBJ)
+        synced = await bot.tree.sync(guild=GUILD_OBJ)
+        print(f"Синхронизировано {len(synced)} команд(а) для сервера.")
     except Exception as e:
         print(f"Ошибка синхронизации команд: {e}")
 
@@ -96,11 +150,16 @@ async def on_thread_update(before, after):
         after.archived
         and not before.archived
         and after.owner_id == bot.user.id
+        and after.guild.id == GUILD_ID
         and isinstance(after, discord.Thread)
     ):
         try:
             await after.edit(archived=False)
             print(f"Ветка «{after.name}» разархивирована автоматически.")
+            await notify_owner(
+                f"⚠️ Ветка **{after.name}** в #{after.parent.name} пропала (заархивировалась), "
+                f"но я её восстановил."
+            )
         except Exception as e:
             print(f"Не удалось разархивировать ветку «{after.name}»: {e}")
 
